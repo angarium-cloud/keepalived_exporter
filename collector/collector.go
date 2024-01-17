@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -12,10 +11,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-kit/log"
+	"github.com/go-kit/log/level"
 	"github.com/moby/ipvs"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/shirou/gopsutil/process"
+	"github.com/shirou/gopsutil/v3/process"
 )
+
+// Exporter namespace.
+const namespace = "keepalived"
 
 // Signals.
 const (
@@ -81,18 +85,21 @@ type Stats struct {
 	PriZeroSent       int `json:"pri_zero_sent"`
 }
 
-// KACollector type.
-type KACollector struct {
+// KeepalivedCollector type.
+type KeepalivedCollector struct {
 	useJSON bool
 	metrics map[string]*prometheus.Desc
 	handle  *ipvs.Handle
 	mutex   sync.Mutex
+	logger  log.Logger
 }
 
-// NewKACollector creates an KACollector.
-func NewKACollector(useJSON bool) (*KACollector, error) {
-	coll := &KACollector{}
-	coll.useJSON = useJSON
+// NewKeepalivedCollector creates an KACollector.
+func NewKeepalivedCollector(useJSON bool, logger log.Logger) (*KeepalivedCollector, error) {
+	coll := &KeepalivedCollector{
+		logger:  logger,
+		useJSON: useJSON,
+	}
 
 	labelsVrrp := []string{"name", "intf", "vrid", "state"}
 	metrics := map[string]*prometheus.Desc{
@@ -135,14 +142,14 @@ func NewKACollector(useJSON bool) (*KACollector, error) {
 }
 
 // Describe outputs metrics descriptions.
-func (k *KACollector) Describe(ch chan<- *prometheus.Desc) {
+func (k *KeepalivedCollector) Describe(ch chan<- *prometheus.Desc) {
 	for _, m := range k.metrics {
 		ch <- m
 	}
 }
 
 // Collect fetches metrics from and sends them to the provided channel.
-func (k *KACollector) Collect(ch chan<- prometheus.Metric) {
+func (k *KeepalivedCollector) Collect(ch chan<- prometheus.Metric) {
 	k.mutex.Lock()
 	defer k.mutex.Unlock()
 
@@ -153,14 +160,14 @@ func (k *KACollector) Collect(ch chan<- prometheus.Metric) {
 		kaStats, err = k.json()
 		if err != nil {
 			ch <- prometheus.MustNewConstMetric(k.metrics["keepalived_up"], prometheus.GaugeValue, 0)
-			log.Printf("keepalived_exporter: %v", err)
+			level.Error(k.logger).Log("keepalived_exporter: %v", err)
 			return
 		}
 	} else {
 		kaStats, err = k.text()
 		if err != nil {
 			ch <- prometheus.MustNewConstMetric(k.metrics["keepalived_up"], prometheus.GaugeValue, 0)
-			log.Printf("keepalived_exporter: %v", err)
+			level.Error(k.logger).Log("keepalived_exporter: %v", err)
 			return
 		}
 	}
@@ -210,14 +217,14 @@ func (k *KACollector) Collect(ch chan<- prometheus.Metric) {
 	svcs, err := k.handle.GetServices()
 	if err != nil {
 		ch <- prometheus.MustNewConstMetric(k.metrics["keepalived_up"], prometheus.GaugeValue, 0)
-		log.Printf("keepalived_exporter: services: %v", err)
+		level.Error(k.logger).Log("keepalived_exporter: services %v", err)
 		return
 	}
 
 	for _, s := range svcs {
 		dsts, err := k.handle.GetDestinations(s)
 		if err != nil {
-			log.Printf("keepalived_exporter: destinations: %v", err)
+			level.Error(k.logger).Log("keepalived_exporter: destination %v", err)
 			continue
 		}
 
@@ -253,7 +260,7 @@ func (k *KACollector) Collect(ch chan<- prometheus.Metric) {
 }
 
 // signal sends given signal to keepalived process.
-func (k *KACollector) signal(sig syscall.Signal) error {
+func (k *KeepalivedCollector) signal(sig syscall.Signal) error {
 	ps, err := process.Processes()
 	if err != nil {
 		return err
@@ -291,7 +298,7 @@ func (k *KACollector) signal(sig syscall.Signal) error {
 }
 
 // json returns slice of KAStats from json file.
-func (k *KACollector) json() ([]KAStats, error) {
+func (k *KeepalivedCollector) json() ([]KAStats, error) {
 	kaStats := make([]KAStats, 0)
 
 	err := k.signal(SIGJSON)
@@ -303,7 +310,7 @@ func (k *KACollector) json() ([]KAStats, error) {
 }
 
 // text returns slice of KAStats from text files.
-func (k *KACollector) text() ([]KAStats, error) {
+func (k *KeepalivedCollector) text() ([]KAStats, error) {
 	kaStats := make([]KAStats, 0)
 
 	err := k.signal(syscall.SIGUSR1)
@@ -339,7 +346,7 @@ func (k *KACollector) text() ([]KAStats, error) {
 }
 
 // decodeJson decodes stats from json file.
-func (k *KACollector) decodeJson() ([]KAStats, error) {
+func (k *KeepalivedCollector) decodeJson() ([]KAStats, error) {
 	stats := make([]KAStats, 0)
 
 	f, err := os.Open("/tmp/keepalived.json")
@@ -360,7 +367,7 @@ func (k *KACollector) decodeJson() ([]KAStats, error) {
 }
 
 // parseData decodes data from text file.
-func (k *KACollector) parseData() ([]Data, error) {
+func (k *KeepalivedCollector) parseData() ([]Data, error) {
 	data := make([]Data, 0)
 
 	f, err := os.Open("/tmp/keepalived.data")
@@ -425,7 +432,7 @@ func (k *KACollector) parseData() ([]Data, error) {
 }
 
 // parseStats decodes stats from text file.
-func (k *KACollector) parseStats() ([]Stats, error) {
+func (k *KeepalivedCollector) parseStats() ([]Stats, error) {
 	data := make([]Stats, 0)
 
 	f, err := os.Open("/tmp/keepalived.stats")

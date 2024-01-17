@@ -1,59 +1,76 @@
 package main
 
 import (
-	"flag"
-	"log"
-	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 
+	"github.com/alecthomas/kingpin/v2"
+	"github.com/go-kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/common/promlog"
+	"github.com/prometheus/common/promlog/flag"
+	"github.com/prometheus/common/version"
+	"github.com/prometheus/exporter-toolkit/web"
+	webflag "github.com/prometheus/exporter-toolkit/web/kingpinflag"
 
-	"github.com/gen2brain/keepalived_exporter/collector"
+	"github.com/angarium-cloud/keepalived_exporter/collector"
 )
 
-var version, commit, date string
+func init() {
+	prometheus.MustRegister(version.NewCollector("keepalived_exporter"))
+}
+
+var Version, commit, date string
 
 func main() {
-	listenAddr := flag.String("web.listen-address", ":9650", "Address to listen on for web interface and telemetry.")
-	metricsPath := flag.String("web.telemetry-path", "/metrics", "A path under which to expose metrics.")
-	keepalivedJson := flag.Bool("ka.json", false, "Send SIGJSON and decode JSON file instead of parsing text files.")
-	appVersion := flag.Bool("version", false, "Display version information.")
+	var (
+		metricsPath = kingpin.Flag(
+			"web.telemetry-path",
+			"Path under which to expose metrics.",
+		).Default("/metrics").String()
+		toolkitFlags = webflag.AddFlags(kingpin.CommandLine, ":9650")
+		useJSON      = kingpin.Flag("keepalived.use-json", "Send SIGJSON and decode JSON file instead of parsing text files.").Default("false").Bool()
+	)
 
-	flag.Parse()
+	promlogConfig := &promlog.Config{}
+	flag.AddFlags(kingpin.CommandLine, promlogConfig)
+	kingpin.Version(version.Print("keepalived_exporter"))
+	kingpin.Parse()
+	logger := promlog.New(promlogConfig)
 
-	if *appVersion {
-		println(filepath.Base(os.Args[0]), version, commit, date)
-		os.Exit(0)
-	}
+	level.Info(logger).Log("msg", "Starting keepalived_exporter", "version", version.Info())
+	level.Info(logger).Log("msg", "Build context", "build_context", version.BuildContext())
 
-	registry := prometheus.NewRegistry()
-
-	if coll, err := collector.NewKACollector(*keepalivedJson); err == nil {
-		registry.MustRegister(coll)
-	} else {
-		log.Fatal(err)
-	}
-
-	http.Handle(*metricsPath, promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`<html>
-			<head><title>Keepalived Exporter</title></head>
-			<body>
-			<h1>Keepalived Exporter</h1>
-			<p><a href='` + *metricsPath + `'>Metrics</a></p>
-			</body>
-			</html>`))
-	})
-
-	srv := &http.Server{}
-	listener, err := net.Listen("tcp4", *listenAddr)
+	coll, err := collector.NewKeepalivedCollector(*useJSON, logger)
 	if err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
+	prometheus.MustRegister(coll)
 
-	log.Printf("Providing metrics at %s%s", *listenAddr, *metricsPath)
-	log.Fatal(srv.Serve(listener))
+	if *metricsPath != "/" && *metricsPath != "" {
+		landingConfig := web.LandingConfig{
+			Name:        "Keepalived Exporter",
+			Description: "Prometheus Exporter for Keepalived service",
+			Version:     version.Info(),
+			Links: []web.LandingLinks{
+				{
+					Address: *metricsPath,
+					Text:    "Metrics",
+				},
+			},
+		}
+		landingPage, err := web.NewLandingPage(landingConfig)
+		if err != nil {
+			level.Error(logger).Log("err", err)
+			os.Exit(1)
+		}
+		http.Handle("/", landingPage)
+	}
+	http.Handle(*metricsPath, promhttp.Handler())
+	server := &http.Server{}
+	if err := web.ListenAndServe(server, toolkitFlags, logger); err != nil {
+		level.Info(logger).Log("err", err)
+		os.Exit(1)
+	}
 }
