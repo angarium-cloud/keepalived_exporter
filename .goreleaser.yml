@@ -1,16 +1,18 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 project_name: keepalived_exporter
 
 builds:
   - binary: "{{ .ProjectName }}"
     id: "amd64"
-    hooks:
-      post: upx dist/amd64_linux_amd64/keepalived_exporter
     goos:
       - linux
     goarch:
       - amd64
     env:
       - CGO_ENABLED=0
+
+upx:
+  - enabled: true
 
 archives:
   - id: archive
@@ -21,3 +23,16 @@ archives:
 
 snapshot:
   name_template: "{{ .Tag }}-snapshot"
+
+signs:
+  - cmd: cosign
+    env:
+      - COSIGN_EXPERIMENTAL=1
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+    artifacts: checksum
+    output: true

@@ -1,0 +1,48 @@
+name: Build on Tag
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - v*
+    paths:
+      - "!.github/**"
+  release:
+    types: [published]
+
+permissions:
+  contents: write # needed to write releases
+  id-token: write # needed for keyless signing
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Cosign
+        uses: sigstore/cosign-installer@v3.3.0
+
+      - name: Setup Syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Setup UPX
+        uses: crazy-max/ghaction-upx@v3
+        with:
+          install-only: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

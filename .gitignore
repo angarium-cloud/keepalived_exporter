@@ -1,1 +1,4 @@
 /keepalived_exporter
+main
+.vscode
+dist
