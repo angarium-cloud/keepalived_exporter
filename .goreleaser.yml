@@ -34,5 +34,6 @@ signs:
       - "--output-certificate=${certificate}"
       - "--output-signature=${signature}"
       - "${artifact}"
-    artifacts: checksum
+      - "--yes"
+    artifacts: all
     output: true
