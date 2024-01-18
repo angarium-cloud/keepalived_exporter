@@ -160,14 +160,14 @@ func (k *KeepalivedCollector) Collect(ch chan<- prometheus.Metric) {
 		kaStats, err = k.json()
 		if err != nil {
 			ch <- prometheus.MustNewConstMetric(k.metrics["keepalived_up"], prometheus.GaugeValue, 0)
-			level.Error(k.logger).Log("keepalived_exporter: %v", err)
+			level.Error(k.logger).Log("msg", "keepalived_exporter error collecting JSON stats", "err", err)
 			return
 		}
 	} else {
 		kaStats, err = k.text()
 		if err != nil {
 			ch <- prometheus.MustNewConstMetric(k.metrics["keepalived_up"], prometheus.GaugeValue, 0)
-			level.Error(k.logger).Log("keepalived_exporter: %v", err)
+			level.Error(k.logger).Log("msg", "keepalived_exporter error collecting TEXT stats", "err", err)
 			return
 		}
 	}
@@ -217,14 +217,14 @@ func (k *KeepalivedCollector) Collect(ch chan<- prometheus.Metric) {
 	svcs, err := k.handle.GetServices()
 	if err != nil {
 		ch <- prometheus.MustNewConstMetric(k.metrics["keepalived_up"], prometheus.GaugeValue, 0)
-		level.Error(k.logger).Log("keepalived_exporter: services %v", err)
+		level.Error(k.logger).Log("msg", "keepalived_exporter error collecting IPVS Service stats", "err", err)
 		return
 	}
 
 	for _, s := range svcs {
 		dsts, err := k.handle.GetDestinations(s)
 		if err != nil {
-			level.Error(k.logger).Log("keepalived_exporter: destination %v", err)
+			level.Error(k.logger).Log("msg", "keepalived_exporter error collecting IPVS Destination stats", "err", err)
 			continue
 		}
 
